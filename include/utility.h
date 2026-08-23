@@ -156,12 +156,12 @@ public:
     {
 		// Robot info
 		std::string ns = nh.getNamespace(); // namespace of robot
-		if(ns.length() != 2)
+		if(ns.length() < 2 || ns.front() != '/')
 		{
-			ROS_ERROR("Invalid robot prefix (should be either 'a-z' or 'A-Z'): %s", ns.c_str());
+			ROS_ERROR("Invalid robot namespace (expected /a or a full name such as /alpha): %s", ns.c_str());
 			ros::shutdown();
 		}
-		name = ns.substr(1, 1); // leave '/'
+		name = ns.substr(1); // remove the leading '/' and preserve the full namespace
 
         nh.param<std::string>("/robot_id", robot_id, "roboat");
 
