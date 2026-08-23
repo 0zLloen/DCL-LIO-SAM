@@ -126,8 +126,14 @@ public:
     {
         laserCloudIn->clear();
         extractedCloud->clear();
-        // reset range matrix for range image projection
-        rangeMat = cv::Mat(N_SCAN, Horizon_SCAN, CV_32F, cv::Scalar::all(FLT_MAX));
+        // reset range matrix for range image projection.
+        // The previous `rangeMat = cv::Mat(...)` form triggered
+        // cv::Mat::release()'s !fixedSize() assertion in OpenCV 4.2
+        // intermittently after ~100s of sim time, killing imageProjection.
+        // create()+setTo() reuses the existing buffer in place — no release
+        // path involved — and is the documented idiomatic reset pattern.
+        rangeMat.create(N_SCAN, Horizon_SCAN, CV_32F);
+        rangeMat.setTo(cv::Scalar::all(FLT_MAX));
 
         imuPointerCur = 0;
         firstPointFlag = true;
@@ -293,10 +299,10 @@ public:
         std::lock_guard<std::mutex> lock2(odoLock);
 
         // make sure IMU data available for the scan
-        if (imuQueue.empty() || imuQueue.front().header.stamp.toSec() > timeScanCur || imuQueue.back().header.stamp.toSec() < timeScanEnd)
-        {
-            ROS_DEBUG("Waiting for IMU data ...");
-            return false;
+		if (imuQueue.empty() || imuQueue.front().header.stamp.toSec() > timeScanCur || imuQueue.back().header.stamp.toSec() < timeScanEnd)
+		{
+			ROS_DEBUG("Waiting for IMU data ...");
+			return false;
         }
 
         imuDeskewInfo();

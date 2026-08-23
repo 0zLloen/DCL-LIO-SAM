@@ -171,7 +171,7 @@ public:
         subGPS   = nh.subscribe<nav_msgs::Odometry> (gpsTopic, 200, &mapOptimization::gpsHandler, this, ros::TransportHints().tcpNoDelay());
         // subLoop  = nh.subscribe<std_msgs::Float64MultiArray>("lio_loop/loop_closure_detection", 1, &mapOptimization::loopInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
-        // srvSaveMap  = nh.advertiseService("lio_sam/save_map", &mapOptimization::saveMapService, this);
+        srvSaveMap  = nh.advertiseService("lio_sam/save_map", &mapOptimization::saveMapService, this);
 
         pubHistoryKeyFrames   = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/icp_loop_closure_history_cloud", 1);
         pubIcpKeyFrames       = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/icp_loop_closure_corrected_cloud", 1);
@@ -229,7 +229,7 @@ public:
             transformTobeMapped[i] = 0;
         }
 
-        matP = cv::Mat(6, 6, CV_32F, cv::Scalar::all(0));
+		matP = cv::Mat::zeros(6, 6, CV_32F);
     }
 
     void laserCloudInfoHandler(const dcl_lio_sam::cloud_infoConstPtr& msgIn)
@@ -417,71 +417,123 @@ public:
 
 
 
-    // bool saveMapService(dcl_lio_sam::save_mapRequest& req, dcl_lio_sam::save_mapResponse& res)
-    // {
-    //   string saveMapDirectory;
+    bool saveMapService(dcl_lio_sam::save_mapRequest& req, dcl_lio_sam::save_mapResponse& res)
+    {
+      string saveMapDirectory;
 
-    //   cout << "****************************************************" << endl;
-    //   cout << "Saving map to pcd files ..." << endl;
-    //   if(req.destination.empty()) saveMapDirectory = std::getenv("HOME") + savePCDDirectory;
-    //   else saveMapDirectory = std::getenv("HOME") + req.destination;
-    //   cout << "Save destination: " << saveMapDirectory << endl;
-    //   // create directory and remove old files;
-    //   int unused = system((std::string("exec rm -r ") + saveMapDirectory).c_str());
-    //   unused = system((std::string("mkdir -p ") + saveMapDirectory).c_str());
-    //   // save key frame transformations
-    //   pcl::io::savePCDFileBinary(saveMapDirectory + "/trajectory.pcd", *cloudKeyPoses3D);
-    //   pcl::io::savePCDFileBinary(saveMapDirectory + "/transformations.pcd", *cloudKeyPoses6D);
-    //   // extract global point cloud map
-    //   pcl::PointCloud<PointType>::Ptr globalCornerCloud(new pcl::PointCloud<PointType>());
-    //   pcl::PointCloud<PointType>::Ptr globalCornerCloudDS(new pcl::PointCloud<PointType>());
-    //   pcl::PointCloud<PointType>::Ptr globalSurfCloud(new pcl::PointCloud<PointType>());
-    //   pcl::PointCloud<PointType>::Ptr globalSurfCloudDS(new pcl::PointCloud<PointType>());
-    //   pcl::PointCloud<PointType>::Ptr globalMapCloud(new pcl::PointCloud<PointType>());
-    //   for (int i = 0; i < (int)cloudKeyPoses3D->size(); i++) {
-    //       *globalCornerCloud += *transformPointCloud(cornerCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]);
-    //       *globalSurfCloud   += *transformPointCloud(surfCloudKeyFrames[i],    &cloudKeyPoses6D->points[i]);
-    //       cout << "\r" << std::flush << "Processing feature cloud " << i << " of " << cloudKeyPoses6D->size() << " ...";
-    //   }
+      cout << "****************************************************" << endl;
+      cout << "Saving map to pcd files ..." << endl;
+      if(req.destination.empty()) saveMapDirectory = std::getenv("HOME") + savePCDDirectory;
+      else saveMapDirectory = std::getenv("HOME") + req.destination;
+      cout << "Save destination: " << saveMapDirectory << endl;
+      // DCL-SLAM replaces LIO-SAM's local factor-graph keyframe store with the
+      // distributed mapper. Prefer the original LIO-SAM store when it exists;
+      // otherwise assemble the map from DCL's local distributed keyframes.
+      bool useDistributedKeyframes = cloudKeyPoses3D->empty();
+      auto distributedKeyPoses3D = dm.getLocalKeyposesCloud3D();
+      auto distributedKeyPoses6D = dm.getLocalKeyposesCloud6D();
+      if (useDistributedKeyframes &&
+          (distributedKeyPoses3D->empty() || distributedKeyPoses6D->empty())) {
+          cout << "[save_map] No keyframes have been registered yet; aborting." << endl;
+          res.success = false;
+          return true;
+      }
+      // create directory and remove old files;
+      int unused = system((std::string("exec rm -r ") + saveMapDirectory).c_str());
+      unused = system((std::string("mkdir -p ") + saveMapDirectory).c_str());
+      (void)unused;
+      if (useDistributedKeyframes) {
+        cout << "[save_map] Using DCL distributed mapper keyframes." << endl;
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/trajectory.pcd", *distributedKeyPoses3D);
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/transformations.pcd", *distributedKeyPoses6D);
 
-    //   if(req.resolution != 0)
-    //   {
-    //     cout << "\n\nSave resolution: " << req.resolution << endl;
+        pcl::PointCloud<PointType>::Ptr globalMapCloud(new pcl::PointCloud<PointType>());
+        for (int i = 0; i < (int)distributedKeyPoses3D->size() && i < (int)distributedKeyPoses6D->size(); i++) {
+            pcl::PointCloud<PointType>::Ptr keyframe(new pcl::PointCloud<PointType>(dm.getLocalKeyframe(i)));
+            *globalMapCloud += *transformPointCloud(keyframe, &distributedKeyPoses6D->points[i]);
+            cout << "\r" << std::flush << "Processing distributed keyframe cloud " << i << " of " << distributedKeyPoses6D->size() << " ...";
+        }
 
-    //     // down-sample and save corner cloud
-    //     downSizeFilterCorner.setInputCloud(globalCornerCloud);
-    //     downSizeFilterCorner.setLeafSize(req.resolution, req.resolution, req.resolution);
-    //     downSizeFilterCorner.filter(*globalCornerCloudDS);
-    //     pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloudDS);
-    //     // down-sample and save surf cloud
-    //     downSizeFilterSurf.setInputCloud(globalSurfCloud);
-    //     downSizeFilterSurf.setLeafSize(req.resolution, req.resolution, req.resolution);
-    //     downSizeFilterSurf.filter(*globalSurfCloudDS);
-    //     pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloudDS);
-    //   }
-    //   else
-    //   {
-    //     // save corner cloud
-    //     pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloud);
-    //     // save surf cloud
-    //     pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloud);
-    //   }
+        if(req.resolution != 0)
+        {
+          cout << "\n\nSave resolution: " << req.resolution << endl;
+          pcl::PointCloud<PointType>::Ptr globalMapCloudDS(new pcl::PointCloud<PointType>());
+          downSizeFilterSurf.setInputCloud(globalMapCloud);
+          downSizeFilterSurf.setLeafSize(req.resolution, req.resolution, req.resolution);
+          downSizeFilterSurf.filter(*globalMapCloudDS);
+          pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalMapCloudDS);
+          int ret = pcl::io::savePCDFileBinary(saveMapDirectory + "/GlobalMap.pcd", *globalMapCloudDS);
+          res.success = ret == 0;
+        }
+        else
+        {
+          pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalMapCloud);
+          int ret = pcl::io::savePCDFileBinary(saveMapDirectory + "/GlobalMap.pcd", *globalMapCloud);
+          res.success = ret == 0;
+        }
 
-    //   // save global point cloud map
-    //   *globalMapCloud += *globalCornerCloud;
-    //   *globalMapCloud += *globalSurfCloud;
+        downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
+        downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
 
-    //   int ret = pcl::io::savePCDFileBinary(saveMapDirectory + "/GlobalMap.pcd", *globalMapCloud);
-    //   res.success = ret == 0;
+        cout << "****************************************************" << endl;
+        cout << "Saving map to pcd files completed\n" << endl;
 
-    //   downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
-    //   downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
+        return true;
+      }
 
-    //   cout << "****************************************************" << endl;
-    //   cout << "Saving map to pcd files completed\n" << endl;
+      // save key frame transformations
+      pcl::io::savePCDFileBinary(saveMapDirectory + "/trajectory.pcd", *cloudKeyPoses3D);
+      pcl::io::savePCDFileBinary(saveMapDirectory + "/transformations.pcd", *cloudKeyPoses6D);
+      // extract global point cloud map
+      pcl::PointCloud<PointType>::Ptr globalCornerCloud(new pcl::PointCloud<PointType>());
+      pcl::PointCloud<PointType>::Ptr globalCornerCloudDS(new pcl::PointCloud<PointType>());
+      pcl::PointCloud<PointType>::Ptr globalSurfCloud(new pcl::PointCloud<PointType>());
+      pcl::PointCloud<PointType>::Ptr globalSurfCloudDS(new pcl::PointCloud<PointType>());
+      pcl::PointCloud<PointType>::Ptr globalMapCloud(new pcl::PointCloud<PointType>());
+      for (int i = 0; i < (int)cloudKeyPoses3D->size(); i++) {
+          *globalCornerCloud += *transformPointCloud(cornerCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]);
+          *globalSurfCloud   += *transformPointCloud(surfCloudKeyFrames[i],    &cloudKeyPoses6D->points[i]);
+          cout << "\r" << std::flush << "Processing feature cloud " << i << " of " << cloudKeyPoses6D->size() << " ...";
+      }
 
-    //   return true;
-    // }
+      if(req.resolution != 0)
+      {
+        cout << "\n\nSave resolution: " << req.resolution << endl;
+
+        // down-sample and save corner cloud
+        downSizeFilterCorner.setInputCloud(globalCornerCloud);
+        downSizeFilterCorner.setLeafSize(req.resolution, req.resolution, req.resolution);
+        downSizeFilterCorner.filter(*globalCornerCloudDS);
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloudDS);
+        // down-sample and save surf cloud
+        downSizeFilterSurf.setInputCloud(globalSurfCloud);
+        downSizeFilterSurf.setLeafSize(req.resolution, req.resolution, req.resolution);
+        downSizeFilterSurf.filter(*globalSurfCloudDS);
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloudDS);
+      }
+      else
+      {
+        // save corner cloud
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloud);
+        // save surf cloud
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloud);
+      }
+
+      // save global point cloud map
+      *globalMapCloud += *globalCornerCloud;
+      *globalMapCloud += *globalSurfCloud;
+
+      int ret = pcl::io::savePCDFileBinary(saveMapDirectory + "/GlobalMap.pcd", *globalMapCloud);
+      res.success = ret == 0;
+
+      downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
+      downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
+
+      cout << "****************************************************" << endl;
+      cout << "Saving map to pcd files completed\n" << endl;
+
+      return true;
+    }
 
     // void visualizeGlobalMapThread()
     // {
@@ -1052,8 +1104,8 @@ public:
             kdtreeCornerFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
 
             cv::Mat matA1(3, 3, CV_32F, cv::Scalar::all(0));
-            cv::Mat matD1(1, 3, CV_32F, cv::Scalar::all(0));
-            cv::Mat matV1(3, 3, CV_32F, cv::Scalar::all(0));
+			cv::Mat matD1;
+			cv::Mat matV1;
                     
             if (pointSearchSqDis[4] < 1.0) {
                 float cx = 0, cy = 0, cz = 0;
@@ -1249,7 +1301,7 @@ public:
         cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
         cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
+		cv::Mat matX;
 
         PointType pointOri, coeff;
 
@@ -1293,9 +1345,9 @@ public:
 
         if (iterCount == 0) {
 
-            cv::Mat matE(1, 6, CV_32F, cv::Scalar::all(0));
-            cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
-            cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
+			cv::Mat matE;
+			cv::Mat matV;
+			cv::Mat matV2;
 
             cv::eigen(matAtA, matE, matV);
             matV.copyTo(matV2);
@@ -1317,7 +1369,7 @@ public:
 
         if (isDegenerate)
         {
-            cv::Mat matX2(6, 1, CV_32F, cv::Scalar::all(0));
+			cv::Mat matX2;
             matX.copyTo(matX2);
             matX = matP * matX2;
         }
