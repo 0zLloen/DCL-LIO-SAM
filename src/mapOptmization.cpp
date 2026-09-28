@@ -472,6 +472,32 @@ public:
           res.success = ret == 0;
         }
 
+        // The same keyframe clouds placed at DCL's distributed (world_frame)
+        // estimates instead of the local ones: where DCL itself believes this
+        // robot's map lies relative to the other robots. GlobalMap.pcd above
+        // uses the local poses, which never see inter-robot loop closures.
+        auto globalKeyPoses6D = dm.getGlobalKeyposesCloud6D();
+        pcl::io::savePCDFileBinary(saveMapDirectory + "/distributed_transformations.pcd", *globalKeyPoses6D);
+        pcl::PointCloud<PointType>::Ptr distributedMapCloud(new pcl::PointCloud<PointType>());
+        int missingGlobal = 0;
+        for (int i = 0; i < (int)globalKeyPoses6D->size(); i++) {
+            if (globalKeyPoses6D->points[i].intensity < 0.5) { missingGlobal++; continue; }
+            pcl::PointCloud<PointType>::Ptr keyframe(new pcl::PointCloud<PointType>(dm.getLocalKeyframe(i)));
+            *distributedMapCloud += *transformPointCloud(keyframe, &globalKeyPoses6D->points[i]);
+        }
+        cout << "[save_map] Distributed map: " << globalKeyPoses6D->size() - missingGlobal << " of "
+             << globalKeyPoses6D->size() << " keyframes have a distributed estimate." << endl;
+        if(req.resolution != 0)
+        {
+          pcl::PointCloud<PointType>::Ptr distributedMapCloudDS(new pcl::PointCloud<PointType>());
+          downSizeFilterSurf.setInputCloud(distributedMapCloud);
+          downSizeFilterSurf.setLeafSize(req.resolution, req.resolution, req.resolution);
+          downSizeFilterSurf.filter(*distributedMapCloudDS);
+          distributedMapCloud = distributedMapCloudDS;
+        }
+        if (!distributedMapCloud->empty())
+          pcl::io::savePCDFileBinary(saveMapDirectory + "/DistributedMap.pcd", *distributedMapCloud);
+
         downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
         downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
 
